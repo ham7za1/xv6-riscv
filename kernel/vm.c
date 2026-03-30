@@ -351,11 +351,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
       return -1;
   
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0) {
-      if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
-        return -1;
-      }
-    }
+    if(pa0 == 0)
+      return -1;
 
     pte = walk(pagetable, va0, 0);
     // forbid copyout over read-only user text pages.
@@ -385,11 +382,8 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0) {
-      if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
-        return -1;
-      }
-    }
+    if(pa0 == 0)
+      return -1;
     n = PGSIZE - (srcva - va0);
     if(n > len)
       n = len;
@@ -452,24 +446,42 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 uint64
 vmfault(pagetable_t pagetable, uint64 va, int read)
 {
-  uint64 mem;
+  char *page;
   struct proc *p = myproc();
 
-  if (va >= p->sz)
+  if(va >= p->sz){
     return 0;
+  }
+  
   va = PGROUNDDOWN(va);
-  if(ismapped(pagetable, va)) {
+  
+  if(ismapped(pagetable, va)){
     return 0;
   }
-  mem = (uint64) kalloc();
-  if(mem == 0)
-    return 0;
-  memset((void *) mem, 0, PGSIZE);
-  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
-    kfree((void *)mem);
+  
+  page = kalloc();
+  if(page == 0){
     return 0;
   }
-  return mem;
+  
+  memset(page, 0, PGSIZE);
+  
+  if(mappages(pagetable, va, PGSIZE, (uint64)page, PTE_R | PTE_W | PTE_U) != 0){
+    kfree(page);
+    return 0;
+  }
+
+  uint64 nextva = va + PGSIZE;
+  if(nextva < p->sz && !ismapped(pagetable, nextva)){
+    char *page2 = kalloc();
+    if(page2){
+      memset(page2, 0, PGSIZE);
+      if(mappages(pagetable, nextva, PGSIZE, (uint64)page2, PTE_R | PTE_W | PTE_U) != 0)
+        kfree(page2);
+    }
+  }
+
+  return (uint64)page;
 }
 
 int

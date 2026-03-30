@@ -39,29 +39,27 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  uint64 addr;
-  int t;
-  int n;
+  int nbytes;
+  int mode;
+  uint64 oldsz;
+  struct proc *p = myproc();
 
-  argint(0, &n);
-  argint(1, &t);
-  addr = myproc()->sz;
+  argint(0, &nbytes);
+  argint(1, &mode);
+  oldsz = p->sz;
 
-  if(t == SBRK_EAGER || n < 0) {
-    if(growproc(n) < 0) {
+  if(mode == SBRK_EAGER || nbytes < 0){
+    if(growproc(nbytes) < 0)
       return -1;
-    }
   } else {
-    // Lazily allocate memory for this process: increase its memory
-    // size but don't allocate memory. If the processes uses the
-    // memory, vmfault() will allocate it.
-    if(addr + n < addr)
+    if(oldsz + nbytes < oldsz)
       return -1;
-    if(addr + n > TRAPFRAME)
+    if(oldsz + nbytes > TRAPFRAME)
       return -1;
-    myproc()->sz += n;
+    p->sz += nbytes;
   }
-  return addr;
+
+  return oldsz;
 }
 
 uint64
