@@ -11,8 +11,7 @@
 
 void freerange(void *pa_start, void *pa_end);
 
-extern char end[]; // first address after kernel.
-                   // defined by kernel.ld.
+extern char end[];
 
 struct run {
   struct run *next;
@@ -23,10 +22,47 @@ struct {
   struct run *freelist;
 } kmem;
 
+// COW: Reference count array with its own spinlock.
+// Indexed by physical page number (pa / PGSIZE).
+struct {
+  struct spinlock lock;
+  int count[PHYSTOP / PGSIZE];
+} refcnt;
+
+// Increment ref count for the physical page at pa.
+void
+refinc(uint64 pa)
+{
+  acquire(&refcnt.lock);
+  refcnt.count[pa / PGSIZE]++;
+  release(&refcnt.lock);
+}
+
+// Decrement ref count for the physical page at pa.
+void
+refdec(uint64 pa)
+{
+  acquire(&refcnt.lock);
+  refcnt.count[pa / PGSIZE]--;
+  release(&refcnt.lock);
+}
+
+// Return the current ref count for the physical page at pa.
+int
+refget(uint64 pa)
+{
+  int n;
+  acquire(&refcnt.lock);
+  n = refcnt.count[pa / PGSIZE];
+  release(&refcnt.lock);
+  return n;
+}
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&refcnt.lock, "refcnt"); // COW: initialize ref count spinlock
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -39,10 +75,8 @@ freerange(void *pa_start, void *pa_end)
     kfree(p);
 }
 
-// Free the page of physical memory pointed at by pa,
-// which normally should have been returned by a
-// call to kalloc().  (The exception is when
-// initializing the allocator; see kinit above.)
+// Free the page of physical memory pointed at by pa.
+// COW: Only physically frees the page when ref count drops to 0.
 void
 kfree(void *pa)
 {
@@ -50,6 +84,15 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  // COW: Decrement ref count. Only free if it reaches 0.
+  acquire(&refcnt.lock);
+  refcnt.count[(uint64)pa / PGSIZE]--;
+  if(refcnt.count[(uint64)pa / PGSIZE] > 0){
+    release(&refcnt.lock);
+    return; // Page is still shared — do not free
+  }
+  release(&refcnt.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -76,7 +119,12 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    // COW: Fresh allocation always starts with ref count = 1
+    acquire(&refcnt.lock);
+    refcnt.count[(uint64)r / PGSIZE] = 1;
+    release(&refcnt.lock);
+  }
   return (void*)r;
 }

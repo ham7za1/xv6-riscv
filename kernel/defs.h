@@ -59,6 +59,9 @@ void            ireclaim(int);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+void            refinc(uint64);      // COW: increment ref count
+void            refdec(uint64);      // COW: decrement ref count
+int             refget(uint64);      // COW: get ref count
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -169,6 +172,7 @@ int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             ismapped(pagetable_t, uint64);
 uint64          vmfault(pagetable_t, uint64, int);
+int             cowfault(pagetable_t, uint64);  // COW: handle a COW page fault
 
 // plic.c
 void            plicinit(void);
