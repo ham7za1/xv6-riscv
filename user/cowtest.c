@@ -1,8 +1,14 @@
+//
+// tests for copy-on-write fork() assignment.
+//
+
 #include "kernel/types.h"
 #include "kernel/memlayout.h"
 #include "user/user.h"
 
-// Test 1: simple COW — allocate lots of memory, fork, child exits
+// allocate more than half of physical memory,
+// then fork. this will fail in the default
+// kernel, which does not support copy-on-write.
 void
 simpletest()
 {
@@ -10,14 +16,14 @@ simpletest()
   int sz = (phys_size / 3) * 2;
 
   printf("simple: ");
-
+  
   char *p = sbrk(sz);
   if(p == (char*)0xffffffffffffffffL){
     printf("sbrk(%d) failed\n", sz);
     exit(-1);
   }
 
-  for(char *q = p; q < p+sz; q += 4096){
+  for(char *q = p; q < p + sz; q += 4096){
     *(int*)q = getpid();
   }
 
@@ -26,13 +32,11 @@ simpletest()
     printf("fork() failed\n");
     exit(-1);
   }
+
   if(pid == 0)
     exit(0);
 
-  if(wait(0) < 0){
-    printf("wait() failed\n");
-    exit(-1);
-  }
+  wait(0);
 
   if(sbrk(-sz) == (char*)0xffffffffffffffffL){
     printf("sbrk(-%d) failed\n", sz);
@@ -42,7 +46,10 @@ simpletest()
   printf("ok\n");
 }
 
-// Test 2: three processes all write COW memory — checks ref counts
+// three processes all write COW memory.
+// this causes more than half of physical memory
+// to be allocated, so it also checks whether
+// copied pages are freed.
 void
 threetest()
 {
@@ -51,7 +58,7 @@ threetest()
   int pid1, pid2;
 
   printf("three: ");
-
+  
   char *p = sbrk(sz);
   if(p == (char*)0xffffffffffffffffL){
     printf("sbrk(%d) failed\n", sz);
@@ -66,41 +73,41 @@ threetest()
   if(pid1 == 0){
     pid2 = fork();
     if(pid2 < 0){
-      printf("fork failed\n");
+      printf("fork failed");
       exit(-1);
     }
     if(pid2 == 0){
-      for(char *q = p; q < p+sz; q += 4096)
+      for(char *q = p; q < p + (sz/5)*4; q += 4096){
         *(int*)q = getpid();
-      for(char *q = p; q < p+sz; q += 4096){
+      }
+      for(char *q = p; q < p + (sz/5)*4; q += 4096){
         if(*(int*)q != getpid()){
           printf("wrong content\n");
           exit(-1);
         }
       }
-      exit(0);
+      exit(-1);
     }
-    for(char *q = p; q < p+sz; q += 4096)
-      *(int*)q = getpid();
-    for(char *q = p; q < p+sz; q += 4096){
-      if(*(int*)q != getpid()){
-        printf("wrong content\n");
-        exit(-1);
-      }
+    for(char *q = p; q < p + (sz/2); q += 4096){
+      *(int*)q = 9999;
     }
-    wait(0);
     exit(0);
   }
 
-  for(char *q = p; q < p+sz; q += 4096)
+  for(char *q = p; q < p + sz; q += 4096){
     *(int*)q = getpid();
-  for(char *q = p; q < p+sz; q += 4096){
+  }
+
+  wait(0);
+
+  
+
+  for(char *q = p; q < p + sz; q += 4096){
     if(*(int*)q != getpid()){
       printf("wrong content\n");
       exit(-1);
     }
   }
-  wait(0);
 
   if(sbrk(-sz) == (char*)0xffffffffffffffffL){
     printf("sbrk(-%d) failed\n", sz);
@@ -110,56 +117,61 @@ threetest()
   printf("ok\n");
 }
 
-// Test 3: COW + pipe (tests copyout with COW pages)
 char junk1[4096];
 int fds[2];
 char junk2[4096];
 char buf[4096];
 char junk3[4096];
 
+// test whether copyout() simulates COW faults.
 void
 filetest()
 {
   printf("file: ");
+  
+  buf[0] = 99;
 
-  buf[0] = 0;
-  if(pipe(fds) != 0){
-    printf("pipe() failed\n");
-    exit(-1);
-  }
-  int pid = fork();
-  if(pid < 0){
-    printf("fork() failed\n");
-    exit(-1);
-  }
-  if(pid == 0){
-    close(fds[0]);
-    char buf2[sizeof(buf)];
-    memset(buf2, 'x', sizeof(buf2));
-    if(write(fds[1], buf2, sizeof(buf2)) != sizeof(buf2)){
-      printf("write failed\n");
+  for(int i = 0; i < 4; i++){
+    if(pipe(fds) != 0){
+      printf("pipe() failed\n");
       exit(-1);
     }
-    close(fds[1]);
-    exit(0);
-  }
-  close(fds[1]);
-  int n = read(fds[0], buf, sizeof(buf));
-  if(n != sizeof(buf)){
-    printf("read failed %d\n", n);
-    exit(-1);
-  }
-  close(fds[0]);
-  for(int i = 0; i < (int)sizeof(buf); i++){
-    if(buf[i] != 'x'){
-      printf("wrong content\n");
+    int pid = fork();
+    if(pid < 0){
+      printf("fork failed\n");
+      exit(-1);
+    }
+    if(pid == 0){
+      if(read(fds[0], buf, sizeof(i)) != sizeof(i)){
+        printf("error: read failed\n");
+        exit(1);
+      }
+      int j = *(int*)buf;
+      if(j != i){
+        printf("error: read the wrong value\n");
+        exit(1);
+      }
+      exit(0);
+    }
+    if(write(fds[1], &i, sizeof(i)) != sizeof(i)){
+      printf("error: write failed\n");
       exit(-1);
     }
   }
-  if(wait(0) < 0){
-    printf("wait() failed\n");
-    exit(-1);
+
+  int xstatus = 0;
+  for(int i = 0; i < 4; i++) {
+    wait(&xstatus);
+    if(xstatus != 0) {
+      exit(1);
+    }
   }
+
+  if(buf[0] != 99){
+    printf("error: child overwrote parent\n");
+    exit(1);
+  }
+
   printf("ok\n");
 }
 
@@ -167,8 +179,17 @@ int
 main(int argc, char *argv[])
 {
   simpletest();
+
+  // check that the first simpletest() freed the physical memory.
+  simpletest();
+
   threetest();
+  threetest();
+  threetest();
+
   filetest();
+
   printf("ALL COW TESTS PASSED\n");
+
   exit(0);
 }

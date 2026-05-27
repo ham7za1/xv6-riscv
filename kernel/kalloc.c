@@ -22,14 +22,13 @@ struct {
   struct run *freelist;
 } kmem;
 
-// COW: Reference count array with its own spinlock.
-// Indexed by physical page number (pa / PGSIZE).
+// neww ds for COW ref count 25 to 29
 struct {
   struct spinlock lock;
   int count[PHYSTOP / PGSIZE];
 } refcnt;
 
-// Increment ref count for the physical page at pa.
+// neww ref increment function 32 to 38
 void
 refinc(uint64 pa)
 {
@@ -38,7 +37,7 @@ refinc(uint64 pa)
   release(&refcnt.lock);
 }
 
-// Decrement ref count for the physical page at pa.
+// neww fun to decremtnt reference 
 void
 refdec(uint64 pa)
 {
@@ -47,7 +46,7 @@ refdec(uint64 pa)
   release(&refcnt.lock);
 }
 
-// Return the current ref count for the physical page at pa.
+// neww func to get reference count 
 int
 refget(uint64 pa)
 {
@@ -75,8 +74,7 @@ freerange(void *pa_start, void *pa_end)
     kfree(p);
 }
 
-// Free the page of physical memory pointed at by pa.
-// COW: Only physically frees the page when ref count drops to 0.
+// neww kfree updation 87 to 93
 void
 kfree(void *pa)
 {
@@ -105,9 +103,7 @@ kfree(void *pa)
   release(&kmem.lock);
 }
 
-// Allocate one 4096-byte page of physical memory.
-// Returns a pointer that the kernel can use.
-// Returns 0 if the memory cannot be allocated.
+// neww line added so pg ref starts from 1. 120 to 122
 void *
 kalloc(void)
 {
@@ -120,8 +116,7 @@ kalloc(void)
   release(&kmem.lock);
 
   if(r){
-    memset((char*)r, 5, PGSIZE); // fill with junk
-    // COW: Fresh allocation always starts with ref count = 1
+    memset((char*)r, 5, PGSIZE); 
     acquire(&refcnt.lock);
     refcnt.count[(uint64)r / PGSIZE] = 1;
     release(&refcnt.lock);

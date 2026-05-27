@@ -53,7 +53,10 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // Device interrupt — handled
 
-  } else if(r_scause() == 15){
+    
+  } 
+  // neww for storing cowfault info in trapframe 57 to 72
+  else if(r_scause() == 15){
     // Store page fault: try COW first, then lazy allocation
     uint64 va = r_stval();
     if(cowfault(p->pagetable, va) != 0){

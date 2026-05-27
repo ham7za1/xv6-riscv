@@ -238,18 +238,16 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
 
-    // COW: if the page is writable, make it COW in both parent and child.
-    // Remove PTE_W and set PTE_C so the fault handler recognizes it.
+    // neww to set PTE_C and remove PTE_W 242 tot 245
     if(flags & PTE_W){
       flags = (flags & ~PTE_W) | PTE_C;
       *pte = PA2PTE(pa) | flags;  // update parent's PTE to remove write permission
     }
 
-    // Map the same physical page into the child — no copy yet.
+    // neww map same page instead copying 248 to 251
+    // neww err handling shifted to outside loop
     if(mappages(new, i, PGSIZE, pa, flags) != 0)
       goto err;
-
-    // Both parent and child now reference this page — bump the ref count.
     refinc(pa);
   }
   return 0;
@@ -270,10 +268,9 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
-// COW: Handle a copy-on-write fault at virtual address va.
-// Allocates a new physical page, copies the old page's data,
-// remaps with write permission, and decrements the old page's ref count.
-// Returns 0 on success, -1 on failure (OOM or not a COW page).
+
+
+//neww cowfault function to handle cow when needed 
 int
 cowfault(pagetable_t pagetable, uint64 va)
 {
@@ -284,38 +281,30 @@ cowfault(pagetable_t pagetable, uint64 va)
 
   pte_t *pte = walk(pagetable, va, 0);
 
-  // Must be a valid, user-accessible COW page
   if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_C) == 0)
     return -1;
 
   uint64 old_pa = PTE2PA(*pte);
-  // Restore write permission and clear the COW flag
   uint flags = (PTE_FLAGS(*pte) | PTE_W) & ~PTE_C;
 
-  // Allocate a new physical page for this process
   uint64 new_pa = (uint64)kalloc();
   if(new_pa == 0)
     return -1;  // Out of memory
 
-  // Copy the contents of the old (shared) page to the new (private) page
   memmove((void*)new_pa, (void*)old_pa, PGSIZE);
 
-  // Unmap the old COW mapping (do_free=0 because kfree handles the ref count)
   uvmunmap(pagetable, va, 1, 0);
 
-  // Map the new private page with write permission
   if(mappages(pagetable, va, PGSIZE, new_pa, flags) != 0){
     kfree((void*)new_pa);
     return -1;
   }
 
-  // Decrement the old page's ref count (kfree will free it if count hits 0)
   kfree((void*)old_pa);
   return 0;
 }
 
-// Copy from kernel to user.
-// COW: Before writing, check if destination is a COW page and resolve it.
+// new for getting the page for COW  314, 328 to 340
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
@@ -338,16 +327,13 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(pte == 0)
       return -1;
 
-    // COW: if the destination is a COW page, resolve it before writing
     if(*pte & PTE_C){
       if(cowfault(pagetable, va0) != 0)
         return -1;
-      // Re-fetch physical address after COW resolution
       pa0 = walkaddr(pagetable, va0);
       if(pa0 == 0)
         return -1;
     } else if((*pte & PTE_W) == 0){
-      // Truly read-only page (e.g. text segment) — forbid write
       return -1;
     }
 
